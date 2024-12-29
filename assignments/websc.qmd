@@ -1,0 +1,381 @@
+---
+title: "Film Analysis Report"
+author: "Pelin Ergöz"
+date: "`r Sys.Date()`"
+format: 
+  html:
+    theme: Sketchy  
+    toc: true      
+    toc-depth: 2   
+    code-fold: true 
+    number-sections: true 
+lang: en
+execute:
+ 
+  warning: false 
+  error: false 
+
+---
+
+
+
+```{r warning=FALSE}
+library(RSelenium)
+library(stringr)
+library(rvest)
+library(dplyr)
+
+urls <- c(
+  "https://m.imdb.com/search/title/?title_type=feature&release_date=2010-01-01,2023-12-31&num_votes=2500,&country_of_origin=TR&count=250",
+  "https://m.imdb.com/search/title/?title_type=feature&release_date=,2009-12-31&num_votes=2500,&country_of_origin=TR&count=250"
+)
+
+rD <- rsDriver(browser = "firefox", port = 4545L, verbose = FALSE)
+remDr <- rD[["client"]]
+
+all_movies <- list()
+
+for (url in urls) {
+  remDr$navigate(url)
+  Sys.sleep(5) 
+  
+  page_source <- remDr$getPageSource()[[1]]
+  page <- read_html(page_source)
+  
+  title_names <- page %>% 
+    html_nodes("h3.ipc-title__text") %>%  
+    html_text() %>%
+    head(-1) %>%  
+    str_split(" ", n = 2) %>%             
+    lapply(function(x) x[2]) %>%          
+    unlist()                              
+
+  years <- page %>% 
+    html_nodes(".sc-300a8231-6.dBUjvq.dli-title-metadata span:nth-child(1)") %>%
+    html_text(trim = TRUE)
+
+  duraction <- page %>% 
+    html_nodes(".sc-300a8231-6.dBUjvq.dli-title-metadata span:nth-child(2)") %>%
+    html_text(trim = TRUE)
+
+  rating <- page %>% 
+    html_nodes("span.ipc-rating-star--rating") %>%
+    html_text(trim = TRUE)
+
+  votes <- page %>% 
+    html_nodes("span.ipc-rating-star--voteCount") %>%
+    html_text(trim = TRUE)
+
+  duraction_minutes <- duraction %>%
+    lapply(function(x) {
+      if (str_detect(x, "h") & str_detect(x, "m")) { 
+        parts <- str_split(x, "h ", simplify = TRUE)
+        as.numeric(parts[1]) * 60 + as.numeric(str_replace(parts[2], "m", ""))
+      } else if (str_detect(x, "h")) {
+        as.numeric(str_replace(x, "h", "")) * 60
+      } else if (str_detect(x, "m")) { 
+        as.numeric(str_replace(x, "m", ""))
+      } else {
+        NA 
+      }
+    }) %>%
+    unlist()
+
+
+  votes_numeric <- votes %>%
+    str_replace_all("[()K]", "") %>%
+    as.numeric() * 1000
+  
+  movie_data <- data.frame(
+    Title = title_names,
+    Year = years,
+    Duration = duraction_minutes,
+    Rating = as.numeric(rating),
+    Votes = votes_numeric,
+    stringsAsFactors = FALSE
+  )
+  
+  all_movies <- append(all_movies, list(movie_data))
+}
+
+final_movie_data <- bind_rows(all_movies)
+
+head(final_movie_data)
+
+remDr$close()
+rD$server$stop()
+
+```
+It was decided to pull the data using Rselenium. With the rvest I encountered, I decided to pull with r selenium when I pulled only 25 due to the dynamic loading of the imdb site that takes it statically. By looking at the necessary html tags through the console, the necessary information about the movies was successfully pulled. After that, duration, votes conversions were made ready for the data to be converted to the desired format. When I fulfill the necessary conditions when pulling the data, 482 lines come out, and when I apply the necessary filters from the website and look at it, I find this.
+
+
+
+
+# a. Arrange your data frame in descending order by Rating. Present the top 5 and bottom 5 movies based on user ratings. Have you watched any of these movies? Do you agree or disagree with their current IMDb Ratings?
+
+```{r}
+library(dplyr)
+
+sorted_movies <- final_movie_data %>%
+  arrange(desc(Rating)) # 
+
+top_5_movies <- head(sorted_movies, 5)
+bottom_5_movies <- tail(sorted_movies, 5)
+
+cat("Top 5 Movies:\n")
+print(top_5_movies)
+
+```
+When I looked at the first 5 movies, these are the ones I watched. They are 'Yeşil Çam' classics and each of them starred Kemal Sunal, whose old work can still be seen today. But you also have to look at this. There were more universal works coming out in different parts of the world at this time. 
+
+```{r}
+cat("\nBottom 5 Movies:\n")
+print(bottom_5_movies)
+
+```
+I haven't seen these movies. They're close to the present. 
+
+# b. Check the ratings of 2-3 of your favorite movies. What are their standings?
+
+
+```{r}
+favorite_movies <- c("Babam ve Oğlum", "Kaybedenler Kulübü", "Sonbahar")
+
+favorite_movie_data <- final_movie_data %>%
+  filter(Title %in% favorite_movies) %>%
+  arrange(desc(Rating))
+
+cat("Ratings and Rankings of Your Favorite Movies:\n")
+print(favorite_movie_data)
+
+final_movie_data <- final_movie_data %>%
+  arrange(desc(Rating)) %>%
+  mutate(Rank = row_number())
+
+
+
+```
+I chose 3 of my favorite movies, then I ranked them according to their rating values. Then I decided to create a column that keeps these rankings within the rank framework. as well as a column that keeps their order in my ranking according to time or something else.
+
+```{r}
+# Rankings of your favorite movies
+favorite_movie_rankings <- final_movie_data %>%
+  filter(Title %in% favorite_movies)
+
+cat("\nOverall Rankings of Your Favorite Movies:\n")
+print(favorite_movie_rankings)
+
+```
+It can now be seen where it stands in the overall ranking.
+
+# c. Considering that audience rating is a crucial indicator of movie quality, what can you infer about the average ratings of Turkish movies over the years? Calculate yearly rating averages and plot them as a scatter plot. 
+
+
+
+```{r}
+library(plotly)
+
+yearly_avg_ratings <- final_movie_data %>%
+  group_by(Year) %>%
+  summarise(Film_Count = n(),
+            Average_Rating = mean(Rating, na.rm = TRUE))
+
+fig1 <- plot_ly(
+  yearly_avg_ratings,
+  x = ~as.numeric(Year),
+  y = ~Average_Rating,
+  type = 'scatter',
+  mode = 'lines+markers',
+  line = list(color = '#4CAF50', width = 3), 
+  marker = list(color = '#8BC34A', size = 10) 
+) %>%
+  layout(
+    title = "Yearly Average Ratings",
+    xaxis = list(title = "Year", tickangle = 300),
+    yaxis = list(title = "Average Rating"),
+    plot_bgcolor = 'rgba(245,245,245,1)'
+  )
+
+fig1
+
+
+```
+
+Overall, there has been a marked decline in average ratings, especially after the 2000s. While earlier periods, such as the 1960s and 1970s, had higher and more stable ratings, this has changed in recent years and ratings have fallen to lower levels.
+
+
+```{r}
+fig2 <- plot_ly(
+  yearly_avg_ratings,
+  x = ~as.numeric(Year),
+  y = ~Film_Count,
+  type = 'bar',
+  marker = list(color = '#FF5722', line = list(color = '#E64A19', width = 1.5))
+) %>%
+  layout(
+    title = "Number of Films by Year",
+    xaxis = list(title = "Year", tickangle = 300),
+    yaxis = list(title = "Film Count"),
+    plot_bgcolor = 'rgba(245,245,245,1)'
+  )
+
+fig2
+
+
+
+```
+
+This graph shows the number of movies produced by year. Looking at the graph, I noticed a significant increase in film production, especially after the 2000s. Film production, which was quite low before the 1970s, seems to have picked up a bit in the 1980s. However, production stagnated in the 1990s and even decreased in some years. Since the 2000s, there has been a steady and rapid increase in the number of films, which peaked in the 2010s. After 2010, there are years when the annual number of movies exceeds 25. However, there is also a decline in the number of movies in the 2020s, which represents a pandemic-induced decline.
+
+
+```{r}
+fig3 <- plot_ly(
+  final_movie_data,
+  x = ~Year,
+  y = ~Rating,
+  type = 'box',
+  boxpoints = 'all',
+  jitter = 0.3,
+  pointpos = -1.8,
+  marker = list(color = '#03A9F4', opacity = 0.6),
+  fillcolor = '#B3E5FC'
+) %>%
+  layout(
+    title = "Yearly Rating Distributions",
+    xaxis = list(title = "Year", tickangle = 300),
+    yaxis = list(title = "Rating"),
+    plot_bgcolor = 'rgba(245,245,245,1)'
+  )
+
+fig3
+```
+
+It reveals the ratings performance of movies over the years. Looking at the first quarter, we see that between 1960 and 1980, movie ratings were generally high and concentrated in a narrow range. This period is almost like the “golden age” of movies; there are almost no productions with low ratings. This suggests that a more consistent and high quality production standard was achieved in that period.
+
+However, when we move from the 1980s to the 2000s, things change in the field. The distribution of ratings spreads over a wider range. While some productions rise to the top of the rating rankings, we notice that the number of low-rated films also increases. This may indicate a change in viewers' evaluation criteria or an increase in the diversity of movie quality.
+
+With the 2000s, a brand new game plan is emerging on the field. The range in ratings is getting wider. Especially low ratings (e.g. in the 3-4 band) are becoming more common. However, despite this, films with high ratings also remain in the race. In the period after 2010, the differences in quality have become much more pronounced. In some years, the wide range of ratings between 2 and 9 indicates a significant increase in the number of both low and high quality productions.
+
+
+
+# d. Do you believe there is a relationship between the number of votes a movie received and its rating? Investigate the correlation between Votes and Ratings.
+
+
+```{r}
+library(ggplot2)
+
+correlation <- cor(final_movie_data$Votes, final_movie_data$Rating, use = "complete.obs")
+
+cat("Correlation between number of votes and rating: ", correlation, "\n")
+
+
+
+```
+```{r message=FALSE}
+ggplot(final_movie_data, aes(x = Votes, y = Rating)) +
+  geom_point(alpha = 0.6, color = "blue") +
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  labs(
+    title = "Relationship Between Number of Votes and Rating",
+    x = "Number of Votes",
+    y = "Rating"
+  ) +
+  theme_minimal()
+```
+
+It visualizes the relationship between the number of votes received by the films and their IMDb ratings. The correlation coefficient is **0.139**, indicating a weak positive relationship between the number of votes and the rating. This suggests that movies with more votes tend to receive higher ratings in general, but this relationship is not strongly correlated.
+
+The graph shows that the majority of the films received less than 30,000 votes and that the ratings of these films are distributed in a wide range (between 2.5 and 8.5). This suggests that films with a low number of votes are subject to a greater diversity in audience evaluations. On the other hand, films with more than 50,000 votes generally have higher ratings, suggesting that popular films are evaluated more favorably by a wider audience.
+
+The wide range of ratings for films with a low number of votes suggests that these films are often less well-known or appeal to a niche audience. These films are either highly appreciated by the audience or vice versa with low ratings. Films with a high number of votes, on the other hand, tend to have more consistently high ratings.
+
+In conclusion, although there is a certain relationship between the number of votes and the rating, it is understood that the number of votes alone is not a sufficient criterion to predict the rating of a movie. In order to analyze this relationship more comprehensively, factors such as the genre of the films, the year of production or the audience should also be evaluated. The graph provides a useful visualization to understand the general trends and provides a basis for more detailed analysis.
+
+# e. Do you believe there is a relationship between a movie’s duration and its rating? Investigate the correlation between Duration and Ratings.
+```{r}
+library(ggplot2)
+
+correlation_duration_rating <- cor(final_movie_data$Duration, final_movie_data$Rating, use = "complete.obs")
+
+cat("Correlation between duration and rating: ", correlation_duration_rating, "\n")
+
+
+
+```
+
+The correlation coefficient of 0.0213 indicates that there is almost no relationship between movie duration and rating. This clearly shows that the length of a movie does not have a determining effect on its rating.
+
+
+```{r message=FALSE}
+ggplot(final_movie_data, aes(x = Duration, y = Rating)) +
+  geom_point(alpha = 0.6, color = "blue") +
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  labs(
+    title = "Relationship Between Movie Duration and Rating",
+    x = "Movie Duration (Minutes)",
+    y = "Rating"
+  ) +
+  theme_minimal()
+
+```
+It is noteworthy that the majority of the films are concentrated between 80-120 minutes. The ratings of films of these durations are distributed over a wide range (between 5 and 8), suggesting that standard-length films generally show a similar trend in audience evaluations. However, both shorter (less than 50 minutes) and longer (more than 150 minutes) films are underrepresented in the graph. The ratings of these films are also quite widely distributed, suggesting that the length of the film is not an influential factor on the rating.
+
+
+# 4. Repeat steps 1 and 2 for a different advanced IMDb search. This time, find Turkish movies that are in the top 1000 movies on IMDb. Perform similar scraping to create another DataFrame with only the columns: Title, Year.
+
+
+
+```{r}
+library(RSelenium)
+library(stringr)
+library(rvest)
+library(dplyr)
+
+rD <- rsDriver(browser = "firefox", port = 4545L, verbose = FALSE)
+remDr <- rD[["client"]]
+
+url <- "https://m.imdb.com/search/title/?title_type=feature&num_votes=2500,999999&groups=top_1000&country_of_origin=TR&count=250"
+remDr$navigate(url)
+Sys.sleep(5)
+
+page_source <- remDr$getPageSource()[[1]]
+
+page <- read_html(page_source)
+
+title_names <- page %>% 
+  html_nodes("h3.ipc-title__text") %>%  
+  html_text() %>%                       
+  head(-1) %>%                          
+  str_split(" ", n = 2) %>%             
+  lapply(function(x) x[2]) %>%          
+  unlist()                              
+
+years <- page %>% 
+  html_nodes(".sc-300a8231-6.dBUjvq.dli-title-metadata span:nth-child(1)") %>%
+  html_text(trim = TRUE)
+
+
+
+
+movie_data <- data.frame(
+  Title = title_names,
+  Year = years,
+  
+  stringsAsFactors = FALSE
+)
+
+print(movie_data)
+
+remDr$close()
+rD$server$stop()
+
+```
+```{r}
+merged_df <- merge(final_movie_data, movie_data,
+                   by = c("Title", "Year"), 
+                   all  = FALSE)
+
+ordered_df <- merged_df[order(merged_df$Rank), ]
+ordered_df
+```
+When we look at it, it is obvious that it is not the same as the other data that was taken, we can also see this with the rank we created before, these values were lower in our previous data set. I'm not sure if we can relate this to this, but in the old times, when not everyone had access to television, it was a socializing purpose for people, and the time spent on television was a reality like the Kemal Sunal situation mentioned above. I think people have that kind of tendency. The average user can make a ranking based on the rating and the number of votes given. 
